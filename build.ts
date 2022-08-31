@@ -20,7 +20,6 @@ queries.definitions.forEach((def) => {
   }
 
   const out = b.renderOp(def);
-
   process.stdout.write(out);
 });
 

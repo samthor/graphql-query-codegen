@@ -1,10 +1,18 @@
 {
+  "name": "graphql-query-codegen",
+  "license": "Apache-2.0",
   "type": "module",
   "dependencies": {
     "graphql": "^16.6.0"
   },
   "devDependencies": {
     "@types/node": "^18.7.14",
+    "esbuild": "^0.15.6",
     "tsx": "^3.9.0"
-  }
+  },
+  "version": "0.1.0",
+  "description": "Custom GraphQL queries => typesafe code",
+  "main": "index.js",
+  "repository": "git@github.com:samthor/graphql-query-codegen.git",
+  "author": "Sam Thorogood <sam.thorogood@gmail.com>"
 }

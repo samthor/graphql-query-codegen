@@ -2,7 +2,6 @@
 query GetComments($projectId: ID!) {
   getComments(projectId: $projectId) {
     unreadCount
-    asdfadsfsadfa
     # lastReadAt
     # items {
     #   text
@@ -17,9 +16,7 @@ query SomethingElse($complex: ComplexInput!) {
   somethingElse {
     value
   }
-  getComplex(input: $complex) {
-    x
-  }
+  getComplex(input: $complex)
 }
 
 mutation Blah {

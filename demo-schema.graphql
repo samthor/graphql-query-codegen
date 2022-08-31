@@ -1,0 +1,86 @@
+
+type Query {
+  getComments(projectId: ID!): GetCommentsResponse!
+    @function(name: "alpha-comms-api-${env}-amplifyOps")
+
+  getProject(id: ID!): Project
+
+  getClient(id: ID!): Client
+  getClientByProjectCode(projectCode: String!): Client
+
+  somethingElse: [Foo]!
+
+  getComplex(input: ComplexInput): Int!
+}
+
+type Mutation {
+  foo: Int!
+}
+
+
+
+
+
+
+input ComplexInput {
+  complexValue: Int!
+}
+
+
+type Foo {
+  __typename: String!
+  value: EddieLovesEnums!
+}
+
+
+enum EddieLovesEnums {
+  WHAT
+  ON
+  EARTH
+}
+
+
+"""
+Response from comms-api getComments.
+"""
+type GetCommentsResponse {
+  lastReadAt: AWSDateTime
+  """
+  Unread count, which will be -1 if the user has not read any or the user was not specified.
+  """
+  unreadCount: Int!
+  projectId: ID!
+  items: [CommentModel!]!
+}
+
+
+"""
+Comment model as returned by comms-api.
+"""
+type CommentModel {
+  projectId: ID!
+  createdAt: AWSDateTime!
+  updatedAt: AWSDateTime!
+  editedAt: AWSDateTime
+  createdBy: String!
+  status: String!
+  relatesToSimulationVersion: Int
+  text: String!
+
+  project: Project!
+}
+
+
+type Project {
+  id: ID!
+  projectCode: String
+  name: String
+  description: String
+
+  # TODO: a bunch of stuff
+
+  clientId: ID!
+  client: Client! @connection(fields: ["clientId:id"], query: "getClient")
+  clientByProjectCode: Client! @connection(fields: ["projectCode"], query: "getClientByProjectCode")
+}
+

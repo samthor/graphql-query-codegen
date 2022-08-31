@@ -1,6 +1,6 @@
 
 type Query {
-  getComments(projectId: ID!): GetCommentsResponse!
+  getComments(projectId: ID!, extra: Int): GetCommentsResponse!
     @function(name: "alpha-comms-api-${env}-amplifyOps")
 
   getProject(id: ID!): Project
@@ -10,7 +10,7 @@ type Query {
 
   somethingElse: [Foo]!
 
-  getComplex(input: ComplexInput): Int!
+  getComplex(input: [ComplexInput!]): Int!
 }
 
 type Mutation {

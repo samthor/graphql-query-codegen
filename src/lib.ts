@@ -6,7 +6,6 @@ export type BuilderOptions = {
 
   /**
    * Whether to allow invalid shaped queries, e.g., requesting an object as a scalar or vice-versa.
-   * This probably needs {@link BuilderOptions#allowMissingFields} to be set to work for objects.
    *
    * @default false
    */
@@ -18,6 +17,22 @@ export type BuilderOptions = {
    * @default false
    */
   allowMissingFields: boolean;
+
+  /**
+   * Whether to allow missing arguments on a function selection, e.g., `getThing(foo: String)`
+   * where `foo` is missing.
+   *
+   * @default false
+   */
+  allowMissingArguments: boolean;
+
+  /**
+   * Whether to allow unknown types, e.g., selection of something valid, but where the underlying
+   * type is missing.
+   *
+   * @default true
+   */
+  allowUnknownTypes: boolean;
 
 };
 
@@ -33,10 +48,19 @@ export class Builder {
   };
   #options: BuilderOptions;
 
+  /**
+   * Temporary context for a render.
+   */
+  #context?: {
+    variables: { [name: string]: graphql.VariableDefinitionNode },
+  };
+
   constructor(options: Partial<BuilderOptions> = {}) {
     this.#options = {
       allowInvalidShape: false,
       allowMissingFields: false,
+      allowMissingArguments: false,
+      allowUnknownTypes: true,
       ...options,
     };
   }
@@ -114,35 +138,47 @@ export class Builder {
       return `Array<${inner}>`;
     }
 
+    let renderInvalidObject = false;
+
     // Now, we have a named type.
     const namedTypeName = type.name.value;
     let namedTypeDef = this.#allTypes[namedTypeName];
+
+    resolvedUnknown:
     if (!namedTypeDef) {
       // Allow fall-through to built-in scalars.
       const maybeScalar = this.#scalars[namedTypeName];
-      if (maybeScalar === undefined) {
-        // We can't find the named type (e.g., wants FooBar, can't see it).
-        return `/* can't find type=${JSON.stringify(namedTypeName)} */ unknown`;
+      if (!sel?.selectionSet && maybeScalar !== undefined) {
+        namedTypeDef = {
+          kind: graphql.Kind.SCALAR_TYPE_DEFINITION,
+          name: { kind: graphql.Kind.NAME, value: namedTypeName },
+        };
+        break resolvedUnknown;
       }
 
-      // Pretend we have a scalar.
+      if (!this.#options.allowUnknownTypes) {
+        throw new Error(`Can't find unknown type=${namedTypeName}`);
+      }
+
+      // If the user didn't request anything under this, pretend it's a scalar.
+      if (!sel?.selectionSet) {
+        return `/* can't find scalar type=${JSON.stringify(namedTypeName)} */ unknown`;
+      }
+
+      // Otherwise, pretend it's an object we know nothing about.
+      // TODO: this needs duplicate flags to work...
       namedTypeDef = {
-        kind: graphql.Kind.SCALAR_TYPE_DEFINITION,
+        kind: graphql.Kind.OBJECT_TYPE_DEFINITION,
         name: { kind: graphql.Kind.NAME, value: namedTypeName },
       };
     }
-
-    let renderInvalidObject = false;
 
     switch (namedTypeDef.kind) {
       case graphql.Kind.SCALAR_TYPE_DEFINITION:
         if (sel?.selectionSet) {
           // The user is trying to select a scalar as an object.
-          if (this.#options.allowInvalidShape) {
-            renderInvalidObject = true;
-            break;
-          }
-          throw new Error(`Can't perform object selection on path=${path}, should be scalar=${namedTypeName}`);
+          renderInvalidObject = true;
+          break;
         }
         const actualType = this.#scalars[namedTypeName];
         return actualType ?? `/* can't find scalar=${namedTypeName} */`;
@@ -167,11 +203,8 @@ export class Builder {
 
       case graphql.Kind.ENUM_TYPE_DEFINITION:
         if (sel?.selectionSet) {
-          if (this.#options.allowInvalidShape) {
-            renderInvalidObject = true;
-            break;
-          }
-          throw new Error(`Can't perform object selection on path=${path}, should be enum=${namedTypeName}`);
+          renderInvalidObject = true;
+          break;
         }
         if (!namedTypeDef.values?.length) {
           throw new Error(`No values for enum ${namedTypeName}`);
@@ -181,6 +214,10 @@ export class Builder {
 
     // The user tried to request a scalar as an object but due to their flags we render it anyway.
     if (renderInvalidObject) {
+      if (!this.#options.allowInvalidShape) {
+        throw new Error(`Can't perform object selection on path=${path}, should be scalar=${namedTypeName}`);
+      }
+
       const inner = this.renderMany({
         kind: graphql.Kind.OBJECT_TYPE_DEFINITION,
         name: { kind: graphql.Kind.NAME, value: '' },
@@ -238,6 +275,116 @@ export class Builder {
     return wrap(lines);
   }
 
+  // #typeFromValue(
+  //   value: graphql.ValueNode,
+  // ) {
+  //   switch (value.kind) {
+  //     case graphql.Kind.VARIABLE: {
+  //       const name = value.name.value;
+  //       const variable = this.#context!.variables[name];
+
+  //       if (!variable) {
+  //         throw new Error(`Missing source variable=${name}`);
+  //       }
+
+  //       return variable.type;
+  //     }
+
+  //     case graphql.Kind.NULL:
+  //       return null;
+
+  //     case graphql.Kind.INT:
+  //     case graphql.Kind.FLOAT:
+  //     case graphql.Kind.STRING:
+  //     case graphql.Kind.BOOLEAN:
+  //       // TODO: this is a scalar
+  //       return;
+
+  //     case graphql.Kind.ENUM:
+  //     case graphql.Kind.LIST:
+  //     case graphql.Kind.OBJECT:
+  //   }
+
+  //   value.kind
+  // }
+
+  #checkTypeCompat(
+    req: graphql.TypeNode,
+    value: graphql.ValueNode,
+    path: string,
+  ) {
+
+    // nb. We don't really care about nulls in 'req', because something has been provided.
+    // Maybe for nested types?
+
+    let requiredType = unwrapNonNullType(req);
+    const providedValue = value;
+    // TODO: we need to infer provided type from variable - what is it? we don't care _what value_ it has
+    const providedType = value.kind;
+
+    if (providedValue.kind === graphql.Kind.VARIABLE) {
+      const name = providedValue.name.value;
+      const variable = this.#context!.variables[name];
+
+      if (!variable) {
+        throw new Error(`Missing source variable=${name} for path=${path}`);
+      }
+
+      // TODO: We now have the _type_ of the source varibale, not an actual value.
+    }
+
+    // TODO: check type is valid
+
+    // Short-circuit for list. Call ourselves again for every item in the list.
+    // TODO: We vaguely should support unions here.
+    if (requiredType.kind === graphql.Kind.LIST_TYPE) {
+      if (providedValue.kind !== graphql.Kind.LIST) {
+        throw new Error(`Cannot satisfy list requirement for path=${path}, was provided=${providedValue.kind}`);
+      }
+      for (const value of providedValue.values) {
+        this.#checkTypeCompat(requiredType.type, value, path);
+      }
+      return;
+    }
+  }
+
+  /**
+   * Checks the list of field arguments (requirements) against the provided list.
+   */
+  #checkFieldArguments(
+    req: readonly graphql.InputValueDefinitionNode[] | undefined,
+    args: readonly graphql.ArgumentNode[] | undefined,
+    path: string,
+  ) {
+    const fieldArguments: { [name: string]: graphql.InputValueDefinitionNode } = Object.fromEntries(
+      (req ?? []).map((arg) => [arg.name.value, arg])
+    );
+
+    // Ensure that we're providing the required arguments here.
+    for (const arg of args ?? []) {
+      const req = fieldArguments[arg.name.value];
+      if (req === undefined) {
+        // TODO(samthor): Should this throw if _more_ is provided than needed?
+        continue;
+      }
+      this.#checkTypeCompat(req.type, arg.value, path + `.${arg.name.value}`);
+      delete fieldArguments[arg.name.value];
+    }
+
+    // We don't require values that have a default or allow nulls.
+    for (const fieldArgument of [...Object.values(fieldArguments)]) {
+      if (fieldArgument.defaultValue || fieldArgument.type.kind !== graphql.Kind.NON_NULL_TYPE) {
+        delete fieldArguments[fieldArgument.name.value];
+      }
+    }
+
+    // If we're missing anything then explode now.
+    const missingArguments = Object.keys(fieldArguments);
+    if (missingArguments.length && !this.#options.allowMissingArguments) {
+      throw new Error(`Can't select path=${path}, missing arguments=${missingArguments.join(',')}`);
+    }
+  }
+
   renderMany(
     type: graphql.ObjectTypeDefinitionNode,
     set: graphql.SelectionSetNode,
@@ -249,9 +396,10 @@ export class Builder {
       }
 
       const name = sel.name.value;
-      let t = type?.fields?.find((x) => x.name.value === sel.name.value)?.type;
+      const field = type?.fields?.find((x) => x.name.value === sel.name.value);
+      this.#checkFieldArguments(field?.arguments, sel.arguments, path);
 
-      return `${name}: ${this.renderSingleType(t, sel, path + `.${name}`)};`;
+      return `${name}: ${this.renderSingleType(field?.type, sel, path + `.${name}`)};`;
     });
 
     return wrap(lines);
@@ -276,16 +424,28 @@ export class Builder {
     parts.push(`export const ${op.operation}${opName} = ${JSON.stringify(originalOpSource)};`);
     parts.push('');
 
-    const returnTypeSource = this.renderMany(base, op.selectionSet, opName);
-    parts.push(`export type ${opName}${base.name.value} = ${returnTypeSource}`);
-    parts.push('');
-
-    // These are the variables required to do this query.
-    // TODO(samthor): This does not assert that the input is correct for its usages, which would be
-    // pretty easy to do.
+    // We pull out the variables and store as context so we can check that they're of the correct
+    // type and are provided for the query.
+    const variables: { [name: string]: graphql.VariableDefinitionNode } = {};
     if (op.variableDefinitions?.length) {
-      const variableParts = op.variableDefinitions.map((v) => this.#renderSingleInputName(v, opName));
+      for (const v of op.variableDefinitions) {
+        variables[v.variable.name.value] = v;
+      }
+    }
+
+    try {
+      this.#context = { variables };
+
+      const returnTypeSource = this.renderMany(base, op.selectionSet, opName);
+      parts.push(`export type ${opName}${base.name.value} = ${returnTypeSource}`);
+      parts.push('');
+
+      // These are the variables required to do this query.
+      const variableParts = (op.variableDefinitions ?? []).map((v) => this.#renderSingleInputName(v, opName));
       parts.push(`export type ${opName}Variables = ${wrap(variableParts)};`);
+
+    } finally {
+      this.#context = undefined;
     }
 
     return join(parts);
@@ -294,3 +454,12 @@ export class Builder {
 }
 
 
+/**
+ * Removes {@link graphql.Kind.NON_NULL_TYPE} from this type node.
+ */
+const unwrapNonNullType = (t: graphql.TypeNode): graphql.NamedTypeNode | graphql.ListTypeNode => {
+  if (t.kind == graphql.Kind.NON_NULL_TYPE) {
+    return t.type;
+  }
+  return t;
+};

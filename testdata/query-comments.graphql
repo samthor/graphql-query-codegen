@@ -1,7 +1,11 @@
 
 query GetComments($projectId: ID!) {
-  getComments(projectId: $projectId) {
+  getComments(projectId: $projectId, extra: 123) {
     unreadCount
+    lastReadAt
+    items {
+      createdAt
+    }
     # lastReadAt
     # items {
     #   text
@@ -12,11 +16,11 @@ query GetComments($projectId: ID!) {
   }
 }
 
-query SomethingElse($complex: ComplexInput!) {
+query SomethingElse($complex: Int) {
   somethingElse {
     value
   }
-  getComplex(input: $complex)
+  getComplex(input: [$complex, 324])
 }
 
 mutation Blah {

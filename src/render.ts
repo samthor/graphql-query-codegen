@@ -5,7 +5,7 @@
  */
 export function wrap(raw: string | string[], indent = '  ') {
   let inner = join(raw, indent);
-  if (!inner) {
+  if (!inner.trim()) {
     return '{}';
   }
   if (inner.endsWith('\n')) {

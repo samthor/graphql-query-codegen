@@ -45,6 +45,8 @@ It exports a `Builder` class which is typed.
 
 ## Known Issues
 
+### Input Validation
+
 This library doesn't check that the input types of variables match the expected values in field arguments.
 For example, this is still allowed:
 
@@ -64,3 +66,7 @@ query GetFoo($a: String!) {
   }
 }
 ```
+
+### Unions & Fragments
+
+These features are not yet supported.

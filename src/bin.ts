@@ -1,7 +1,6 @@
 
 import mri from 'mri';
-import * as fs from 'fs';
-import { Builder, graphql } from './index';
+import { Builder, runAllBuilder } from './index';
 import { BuilderOptions } from './lib';
 
 const args = mri(process.argv.slice(2), {
@@ -28,28 +27,14 @@ if (args.loose) {
   options.allowUnknownTypes = true;
 }
 
-const b = new Builder(options);
-
+const scalars: { [name: string]: string } = {};
 [args.scalar].flat().filter((x) => x).forEach((scalar) => {
   const parts = scalar.split(':');
   if (parts.length > 2) {
     throw new Error(`invalid scalar: ${scalar}`);
   }
-  b.addScalar(parts[0], parts[1] || 'any');
+  scalars[parts[0]] = parts[1] || 'any';
 });
 
-for (const p of args._) {
-  const model = graphql.parse(fs.readFileSync(p, 'utf-8'));
-  b.addAllDocument(model);
-}
-
-for (const p of [args.query].flat()) {
-  const queries = graphql.parse(fs.readFileSync(p, 'utf-8'));
-  queries.definitions.forEach((def) => {
-    if (def.kind !== graphql.Kind.OPERATION_DEFINITION) {
-      return;
-    }
-    const out = b.renderOp(def);
-    process.stdout.write(out);
-  });
-}
+const out = runAllBuilder({ options, model: args._, query: args.query, scalars })
+process.stdout.write(out);

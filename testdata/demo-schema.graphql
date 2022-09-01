@@ -10,7 +10,7 @@ type Query {
 
   somethingElse: [Foo]!
 
-  getComplex(input: [ComplexInput!]): Int!
+  getComplex(input: ComplexInput!): Int!
 }
 
 type Mutation {
@@ -20,10 +20,15 @@ type Mutation {
 
 
 
-
+input FooInput {
+  c: [ComplexInput!]
+}
 
 input ComplexInput {
-  complexValue: Int!
+  complexValue: Int! = 123
+  recursive: ComplexInput
+  foo: FooInput
+  something: AWSDateTime123
 }
 
 

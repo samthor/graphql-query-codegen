@@ -53,6 +53,7 @@ export class Builder {
    */
   #context?: {
     variables: { [name: string]: graphql.VariableDefinitionNode },
+    inputTypesToRender: string[],
   };
 
   constructor(options: Partial<BuilderOptions> = {}) {
@@ -129,15 +130,10 @@ export class Builder {
   }
 
   #internalRenderSingleType(
-    type: graphql.NamedTypeNode | graphql.ListTypeNode,
+    type: graphql.NamedTypeNode,
     sel: graphql.FieldNode | undefined,
     path: string,
   ): string {
-    if (type.kind === graphql.Kind.LIST_TYPE) {
-      const inner = this.renderSingleType(type.type, sel, path + '[]');
-      return `Array<${inner}>`;
-    }
-
     let renderInvalidObject = false;
 
     // Now, we have a named type.
@@ -181,7 +177,7 @@ export class Builder {
           break;
         }
         const actualType = this.#scalars[namedTypeName];
-        return actualType ?? `/* can't find scalar=${namedTypeName} */`;
+        return actualType ?? `/* can't find scalar=${namedTypeName} */ any`;
 
       case graphql.Kind.INPUT_OBJECT_TYPE_DEFINITION:
         if (sel !== undefined) {
@@ -243,17 +239,33 @@ export class Builder {
 
     // Deal with nullability, which is inversed in JS. Wrap in `(null | ...)` if we _can't_ find
     // the non-null type wrapper.
-    if (type.kind === graphql.Kind.NON_NULL_TYPE) {
-      return this.#internalRenderSingleType(type.type, sel, path);
+    const nullable = (type.kind !== graphql.Kind.NON_NULL_TYPE);
+    const innerType = nullable ? type : type.type;
+    const render = nullable ? (x: string) => `${x} | null` : (x: string) => x;
+
+    if (innerType.kind === graphql.Kind.LIST_TYPE) {
+      const inner = this.renderSingleType(innerType.type, sel, path + '[]');
+      return `Array<${render(inner)}>`;
     }
-    const inner = this.#internalRenderSingleType(type, sel, path);
-    return `(${inner} | null)`;
+
+    // At this point, we're always a named type.
+    // If this is an input, we need to extract the type.
+    let inner;
+    if (sel === undefined && this.#allTypes[innerType.name.value]?.kind === graphql.Kind.INPUT_OBJECT_TYPE_DEFINITION) {
+      inner = innerType.name.value;
+      this.#context!.inputTypesToRender.push(inner);
+    } else {
+      inner = this.#internalRenderSingleType(innerType, sel, path);
+    }
+
+    return render(inner);
   }
 
   #renderSingleInputName(
     type: graphql.InputValueDefinitionNode | graphql.VariableDefinitionNode,
     path: string,
   ) {
+    const nullable = (type.type.kind !== graphql.Kind.NON_NULL_TYPE);
     let name: string;
     if (type.kind === graphql.Kind.INPUT_VALUE_DEFINITION) {
       name = type.name.value;
@@ -263,7 +275,8 @@ export class Builder {
 
     const o = this.renderSingleType(type.type, undefined, path + `.${name}`);
 
-    const optional = type.defaultValue !== undefined;
+    // Inputs that are nullable are optional, since GraphQL will insert nulls!
+    const optional = nullable || type.defaultValue !== undefined;
     return `${name}${optional ? '?' : ''}: ${o};`;
   }
 
@@ -437,7 +450,7 @@ export class Builder {
     }
 
     try {
-      this.#context = { variables };
+      this.#context = { variables, inputTypesToRender: [] };
 
       const returnTypeSource = this.renderMany(base, op.selectionSet, opName);
       parts.push(`export type ${opName}${base.name.value} = ${returnTypeSource}`);
@@ -447,11 +460,56 @@ export class Builder {
       const variableParts = (op.variableDefinitions ?? []).map((v) => this.#renderSingleInputName(v, opName));
       parts.push(`export type ${opName}${base.name.value}Variables = ${wrap(variableParts)};`);
 
+      const code = join(parts);
+      const deps = this.#context.inputTypesToRender;
+
+      return { code, deps };
+
     } finally {
       this.#context = undefined;
     }
+  }
 
-    return join(parts);
+  /**
+   * Renders dependent types (does not export them). This is needed for input types.
+   */
+  renderDepTypes(names: Iterable<string>) {
+    const parts: string[] = [];
+
+    try {
+      this.#context = { variables: {}, inputTypesToRender: [...names] };
+
+      // Input types can be recursive (well, so can results) in a way that means we have to include
+      // additional type information. This renders them but allows each re-render to provide more
+      // that we continue to render, etc.
+      const seenInputTypes = new Set<string>();
+      for (;;) {
+        const next = this.#context!.inputTypesToRender.shift();
+        if (next === undefined) {
+          break;
+        } else if (seenInputTypes.has(next)) {
+          continue;
+        }
+        seenInputTypes.add(next);
+
+        const t = this.#allTypes[next];
+        if (t === undefined) {
+          throw new Error(`Can't render unknown input type: ${next}`);
+        } else if (t.kind !== graphql.Kind.INPUT_OBJECT_TYPE_DEFINITION) {
+          throw new Error(`Can't render non-object input type: ${next}`);
+        }
+        const inner = this.renderManyInput(t, '');
+        parts.push(`type ${next} = ${inner};`)
+        parts.push('');
+      }
+
+      parts.pop();
+      const code = join(parts);
+      return { code, deps: [...seenInputTypes] };
+
+    } finally {
+      this.#context = undefined;
+    }
   }
 
 }

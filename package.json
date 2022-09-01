@@ -15,7 +15,7 @@
   "bin": "dist/bin.js",
   "main": "dist/index.js",
   "types": "dist/types/index.d.ts",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Custom GraphQL queries => typesafe code",
   "repository": "git@github.com:samthor/graphql-query-codegen.git",
   "author": "Sam Thorogood <sam.thorogood@gmail.com>"

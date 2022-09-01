@@ -34,6 +34,13 @@ export type BuilderOptions = {
    */
   allowUnknownTypes: boolean;
 
+  /**
+   * Whether to export the input types in the generated output.
+   *
+   * @default false
+   */
+  exportInputTypes: boolean;
+
 };
 
 
@@ -62,6 +69,7 @@ export class Builder {
       allowMissingFields: false,
       allowMissingArguments: false,
       allowUnknownTypes: true,
+      exportInputTypes: false,
       ...options,
     };
   }
@@ -245,7 +253,7 @@ export class Builder {
 
     if (innerType.kind === graphql.Kind.LIST_TYPE) {
       const inner = this.renderSingleType(innerType.type, sel, path + '[]');
-      return `Array<${render(inner)}>`;
+      return render(`Array<${inner}>`);
     }
 
     // At this point, we're always a named type.
@@ -499,7 +507,8 @@ export class Builder {
           throw new Error(`Can't render non-object input type: ${next}`);
         }
         const inner = this.renderManyInput(t, '');
-        parts.push(`type ${next} = ${inner};`)
+        const exportKeyword = this.#options.exportInputTypes ? 'export ' : '';
+        parts.push(`${exportKeyword}type ${next} = ${inner};`)
         parts.push('');
       }
 

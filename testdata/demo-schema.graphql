@@ -21,7 +21,7 @@ type Mutation {
 
 
 input FooInput {
-  c: [ComplexInput!]
+  c: [ComplexInput]
 }
 
 input ComplexInput {

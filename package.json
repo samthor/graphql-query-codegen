@@ -9,11 +9,14 @@
   "devDependencies": {
     "@types/node": "^18.7.14",
     "esbuild": "^0.15.6",
-    "tsx": "^3.9.0"
+    "tsx": "^3.9.0",
+    "typescript": "^4.8.2"
   },
+  "bin": "dist/bin.js",
+  "main": "dist/index.js",
+  "types": "dist/types/index.d.ts",
   "version": "0.1.0",
   "description": "Custom GraphQL queries => typesafe code",
-  "main": "index.js",
   "repository": "git@github.com:samthor/graphql-query-codegen.git",
   "author": "Sam Thorogood <sam.thorogood@gmail.com>"
 }

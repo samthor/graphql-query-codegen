@@ -6,6 +6,7 @@ specifiers:
   graphql: ^16.6.0
   mri: ^1.2.0
   tsx: ^3.9.0
+  typescript: ^4.8.2
 
 dependencies:
   graphql: 16.6.0
@@ -15,6 +16,7 @@ devDependencies:
   '@types/node': 18.7.14
   esbuild: 0.15.6
   tsx: 3.9.0
+  typescript: 4.8.2
 
 packages:
 
@@ -308,4 +310,10 @@ packages:
       '@esbuild-kit/esm-loader': 2.4.2
     optionalDependencies:
       fsevents: 2.3.2
+    dev: true
+
+  /typescript/4.8.2:
+    resolution: {integrity: sha512-C0I1UsrrDHo2fYI5oaCGbSejwX4ch+9Y5jTQELvovfmFkK3HHSZJB8MSJcWLmCUBzQBchCrZ9rMRV6GuNrvGtw==}
+    engines: {node: '>=4.2.0'}
+    hasBin: true
     dev: true

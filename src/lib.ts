@@ -417,11 +417,14 @@ export class Builder {
     const opName = op.name.value;
     const base = this.getBaseFor(op.operation);
 
+    // e.g. "GetComments" => "getComments".
+    const varName = opName.substring(0, 1).toLowerCase() + opName.substring(1);
+
     const parts: string[] = [];
 
     // Render to source again (this removes comments and needless whitespace).
     const originalOpSource = graphql.print(op).replace(/\s+/g, ' ');
-    parts.push(`export const ${op.operation}${opName} = ${JSON.stringify(originalOpSource)};`);
+    parts.push(`export const ${varName} = ${JSON.stringify(originalOpSource)};`);
     parts.push('');
 
     // We pull out the variables and store as context so we can check that they're of the correct
@@ -442,7 +445,7 @@ export class Builder {
 
       // These are the variables required to do this query.
       const variableParts = (op.variableDefinitions ?? []).map((v) => this.#renderSingleInputName(v, opName));
-      parts.push(`export type ${opName}Variables = ${wrap(variableParts)};`);
+      parts.push(`export type ${opName}${base.name.value}Variables = ${wrap(variableParts)};`);
 
     } finally {
       this.#context = undefined;

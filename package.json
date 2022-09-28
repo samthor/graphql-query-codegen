@@ -12,10 +12,13 @@
     "tsx": "^3.9.0",
     "typescript": "^4.8.2"
   },
+  "scripts": {
+    "prepublishOnly": "./release.sh"
+  },
   "bin": "dist/bin.js",
   "main": "dist/index.js",
   "types": "dist/types/index.d.ts",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Custom GraphQL queries => typesafe code",
   "repository": "git@github.com:samthor/graphql-query-codegen.git",
   "author": "Sam Thorogood <sam.thorogood@gmail.com>"

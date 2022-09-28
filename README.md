@@ -43,6 +43,11 @@ You can also specify `--loose` to be less restrictive on checks, and `-s ScalarN
 You can also import this library.
 It exports a `Builder` class which is typed.
 
+## Notes
+
+This treats the field `__typename` specially, and asssume it looks like `String!` but with a constant value of name of the type being requested (&hellip;unless that type specifically overrides it).
+(This is part of the spec, but is a bit weird.)
+
 ## Known Issues
 
 ### Input Validation
@@ -67,6 +72,24 @@ query GetFoo($a: String!) {
 }
 ```
 
-### Unions & Fragments
+### Fragments, Unions & Interfaces
 
-These features are not yet supported.
+This package has limited support for fragments, unions and interfaces.
+
+It does not support top-level fragment definitions, but this should work fine:
+
+```graphql
+# query.graphql
+
+query GetWhatever {
+  getInterface {
+    __typename
+    ... on OneOption {
+      hasFieldA
+    }
+    ... on AnotherOption {
+      hasFieldB
+    }
+  }
+}
+```

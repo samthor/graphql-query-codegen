@@ -13,6 +13,8 @@ type Query {
   getComplex(input: ComplexInput!): Int!
 
   getOutputUnion: OutputUnion
+
+  getAllRoots: [RootInterface!]
 }
 
 type Mutation {
@@ -103,3 +105,30 @@ type OutputB {
 
 union OutputUnion = OutputA | OutputB
 
+
+interface RootInterface {
+  name: String!
+}
+
+interface WhateverElseInterface {
+  whatever: String!
+}
+
+interface SubRootInterface implements RootInterface & WhateverElseInterface {
+  name: String!
+  whatever: String!
+}
+
+type HahahaSub implements SubRootInterface {
+  name: String!
+  whatever: String!
+}
+
+type BlahExtendsRoot implements RootInterface {
+  name: String!
+  somethingElse: String!
+}
+
+type UnknownSomething implements RootInterface {
+  whatever: String!
+}

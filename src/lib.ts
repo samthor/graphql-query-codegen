@@ -233,9 +233,8 @@ export class Builder {
         }
         return namedTypeDef.values.map((v) => JSON.stringify(v.name.value)).join(' | ');
 
+      case graphql.Kind.INTERFACE_TYPE_DEFINITION:
       case graphql.Kind.UNION_TYPE_DEFINITION: {
-        // TODO: reuse for interface
-
         if (!sel?.selectionSet) {
           // The user is trying to select a union as a scalar. By the spec, unions are not allowed
           // to include scalars.
@@ -451,19 +450,127 @@ export class Builder {
     }
   }
 
+  #findConcreteTypesImplementing(typeName: string) {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    const pending = [typeName];
+
+    for (; ;) {
+      const curr = pending.shift();
+      if (curr === undefined) {
+        break;
+      }
+      if (seen.has(curr)) {
+        continue;
+      }
+      seen.add(curr);
+
+      const type = this.#allTypes[curr];
+      if (type === undefined) {
+        continue;
+      }
+
+      switch (type.kind) {
+        case graphql.Kind.UNION_TYPE_DEFINITION: {
+          // Union type: we are told immediately what it includes.
+          for (const inner of type.types ?? []) {
+            pending.push(inner.name.value);
+          }
+          break;
+        }
+
+        case graphql.Kind.INTERFACE_TYPE_DEFINITION: {
+          // Interface type. We now need to look at all others to see if they implement us.
+          for (const otherType of Object.values(this.#allTypes)) {
+            if (otherType.kind === graphql.Kind.OBJECT_TYPE_DEFINITION || otherType.kind === graphql.Kind.INTERFACE_TYPE_DEFINITION) {
+              if (otherType.interfaces?.find((name) => name.name.value === curr)) {
+                pending.push(otherType.name.value);
+              }
+            }
+          }
+          break;
+        }
+
+        case graphql.Kind.OBJECT_TYPE_DEFINITION: {
+          // This is a real type! Hooray
+          out.push(curr);
+          break;
+        }
+      }
+    }
+
+    return [...new Set(out)];
+  };
+
+  #maybeExpandToInlineFragments(
+    all: readonly graphql.SelectionNode[],
+    type: graphql.ObjectTypeDefinitionNode | graphql.UnionTypeDefinitionNode | graphql.InterfaceTypeDefinitionNode,
+  ): readonly graphql.SelectionNode[] {
+    if (type.kind === graphql.Kind.OBJECT_TYPE_DEFINITION) {
+      return all;
+    }
+
+    const commonFields: graphql.FieldNode[] = [];
+    const fragments: graphql.InlineFragmentNode[] = [];
+    let typenameField: graphql.FieldNode | null = null;
+
+    all.forEach((x) => {
+      if (x.kind === graphql.Kind.FIELD) {
+        if (x.name.value === TYPENAME_FIELD_NAME) {
+          typenameField = x;
+        } else {
+          commonFields.push(x);
+        }
+      } else if (x.kind === graphql.Kind.INLINE_FRAGMENT) {
+        fragments.push(x);
+      } else {
+        throw new Error(`unsupported selection: ${x.kind}`);
+      }
+    });
+    if (!fragments.length) {
+      return all;  // no fragments
+    }
+
+    // We might need to copy typename around.
+    const maybeEnsureTypename = typenameField ? ensureTypenameInSelections : <T>(x: T) => x;
+
+    return [
+      ...commonFields,
+      ...fragments.map((f) => {
+        return {
+          ...f,
+          selectionSet: {
+            ...f.selectionSet,
+            selections: maybeEnsureTypename(f.selectionSet.selections),
+          },
+        };
+      }),
+
+      // This is a dummy fragment so that TS' narrowing works fine. It's possible to _not_ select
+      // one of the fragment options.
+      // (Technically this might not be true: if the ... search is exhaustive, this is pointless,
+      // but that seems fine).)
+      {
+        kind: graphql.Kind.INLINE_FRAGMENT,
+        selectionSet: {
+          kind: graphql.Kind.SELECTION_SET, selections: maybeEnsureTypename([]),
+        },
+        typeCondition: {
+          kind: graphql.Kind.NAMED_TYPE,
+          name: { kind: graphql.Kind.NAME, value: '' },
+        },
+      },
+    ];
+
+  }
+
   renderMany(
-    type: graphql.ObjectTypeDefinitionNode | graphql.UnionTypeDefinitionNode,
+    type: graphql.ObjectTypeDefinitionNode | graphql.UnionTypeDefinitionNode | graphql.InterfaceTypeDefinitionNode,
     set: graphql.SelectionSetNode,
     path: string,
   ) {
     const extraFragmentParts: string[] = [];
-    let selections = set.selections;
-
-    // If __typename is in the outer part of a fragment selection, then we actually want to clone
-    // it into the fragment branches.
-    if (this.#options.fixedTypenameField) {
-      selections = maybeCopyTypenameToInlineFragments(selections);
-    }
+    const selections = this.#maybeExpandToInlineFragments(set.selections, type);
 
     const lines = selections.map((sel) => {
       switch (sel.kind) {
@@ -512,8 +619,12 @@ export class Builder {
           return `${name}: ${this.renderSingleType(field?.type, sel, path + `.${name}`)};`;
         }
         case graphql.Kind.INLINE_FRAGMENT: {
+          if (!sel.typeCondition) {
+            throw new Error(`only inline fragments that are "... on TypeName" are supported`);
+          }
+
           // This renders the inner fragment (e.g., "... on Foo { bar }") so we can merge it below.
-          const t = this.#internalRenderSingleType(sel.typeCondition!, sel, path + `.${sel.typeCondition!.name.value}`);
+          const t = this.#internalRenderSingleType(sel.typeCondition, sel, path + `.${sel.typeCondition.name.value}`);
           extraFragmentParts.push(t);
           return '';
         };
@@ -525,7 +636,7 @@ export class Builder {
 
     // If this isn't one of the top-level types, include a hint as to what it is.
     const commentValue = type.name.value;
-    if (!['Query', 'Mutation', 'Subscription'].includes(commentValue)) {
+    if (commentValue && !['Query', 'Mutation', 'Subscription'].includes(commentValue)) {
       lines.unshift(`// ${commentValue}`);
     }
 
@@ -636,50 +747,21 @@ export class Builder {
 
 
 /**
- * Copy any found selection of "__typename" to any inline fragments.
+ * Ensures that the selections includes {@link TYPENAME_FIELD_NAME}.
  */
-const maybeCopyTypenameToInlineFragments = (all: readonly graphql.SelectionNode[]): readonly graphql.SelectionNode[] => {
-  let typenameField: graphql.FieldNode | null = null;
-  let hasFragment = false;
-
-  all.forEach((x) => {
-    if (x.kind === graphql.Kind.FIELD && x.name.value === TYPENAME_FIELD_NAME) {
-      typenameField = x;
-    } else if (x.kind === graphql.Kind.INLINE_FRAGMENT) {
-      hasFragment = true;
-    }
-  });
-  if (!typenameField || !hasFragment) {
-    return all;
+const ensureTypenameInSelections = (selections: readonly graphql.SelectionNode[]): readonly graphql.SelectionNode[] => {
+  const hasTypename = selections.some((s) => s.kind === graphql.Kind.FIELD && s.name.value === TYPENAME_FIELD_NAME);
+  if (hasTypename) {
+    return selections;
   }
-
-  return all.map((s) => {
-    if (s.kind !== graphql.Kind.INLINE_FRAGMENT) {
-      return s;
-    }
-
-    const alreadyHasTypename = s.selectionSet.selections.find((n) => n.kind === graphql.Kind.FIELD && n.name.value === TYPENAME_FIELD_NAME);
-    if (alreadyHasTypename) {
-      return s;
-    }
-
-    console.info('copying');
-    return {
-      ...s,
-      selectionSet: {
-        ...s.selectionSet,
-        selections: [
-          {
-            kind: graphql.Kind.FIELD,
-            name: { kind: graphql.Kind.NAME, value: TYPENAME_FIELD_NAME },
-          },
-          ...s.selectionSet.selections,
-        ],
-      },
-    };
-  });
-
-}
+  return [
+    {
+      kind: graphql.Kind.FIELD,
+      name: { kind: graphql.Kind.NAME, value: TYPENAME_FIELD_NAME },
+    },
+    ...selections,
+  ];
+};
 
 
 /**

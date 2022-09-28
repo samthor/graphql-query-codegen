@@ -32,11 +32,16 @@ query Union {
     __typename
     commonField
     ... on OutputA {
-      __typename
       fieldA
     }
-    ... on OutputB {
-      fieldB(arg: 123)
+  }
+}
+
+query Interface {
+  getAllRoots {
+    name
+    ... on BlahExtendsRoot {
+      somethingElse
     }
   }
 }

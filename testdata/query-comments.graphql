@@ -29,8 +29,10 @@ mutation Blah {
 
 query Union {
   getOutputUnion {
+    __typename
     commonField
     ... on OutputA {
+      __typename
       fieldA
     }
     ... on OutputB {

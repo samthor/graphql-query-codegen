@@ -2,6 +2,9 @@ import * as graphql from 'graphql';
 import { join, wrap } from './render';
 
 
+export const TYPENAME_FIELD_NAME = '__typename';
+
+
 export type BuilderOptions = {
 
   /**
@@ -41,6 +44,20 @@ export type BuilderOptions = {
    */
   exportInputTypes: boolean;
 
+  /**
+   * If the field __typename is requested, return it as the literal name.
+   *
+   * @default true
+   */
+  fixedTypenameField: boolean;
+
+  /**
+   * Whether to allow additional unneeded arguments.
+   *
+   * @default true
+   */
+  allowAdditionalArguments: boolean;
+
 };
 
 
@@ -70,6 +87,8 @@ export class Builder {
       allowMissingArguments: false,
       allowUnknownTypes: true,
       exportInputTypes: false,
+      fixedTypenameField: true,
+      allowAdditionalArguments: true,
       ...options,
     };
   }
@@ -261,6 +280,9 @@ export class Builder {
   ) {
     if (type === undefined) {
       // We can't find the named field inside a type (e.g., missing the Query listing).
+      if (sel?.name.value === TYPENAME_FIELD_NAME) {
+        return `string`;
+      }
       if (this.#options.allowMissingFields) {
         return `/* can't find path=${path} */ unknown`;
       }
@@ -407,8 +429,9 @@ export class Builder {
     for (const arg of args ?? []) {
       const req = fieldArguments[arg.name.value];
       if (req === undefined) {
-        // TODO(samthor): Should this throw if _more_ is provided than needed?
-        continue;
+        if (!this.#options.allowAdditionalArguments) {
+          throw new Error(`can't select path=${path}, additional argument passed=${arg.name.value}`);
+        }
       }
       this.#checkTypeCompat(req.type, arg.value, path + `.${arg.name.value}`);
       delete fieldArguments[arg.name.value];
@@ -434,8 +457,15 @@ export class Builder {
     path: string,
   ) {
     const extraFragmentParts: string[] = [];
+    let selections = set.selections;
 
-    const lines = set.selections.map((sel) => {
+    // If __typename is in the outer part of a fragment selection, then we actually want to clone
+    // it into the fragment branches.
+    if (this.#options.fixedTypenameField) {
+      selections = maybeCopyTypenameToInlineFragments(selections);
+    }
+
+    const lines = selections.map((sel) => {
       switch (sel.kind) {
         case graphql.Kind.FIELD: {
           const name = sel.name.value;
@@ -452,7 +482,6 @@ export class Builder {
                 throw new Error(`Found union containing non-object type: ${namedTypeDef.kind}`);
               }
 
-              // TODO: we're not checking args
               const field = namedTypeDef.fields?.find((x) => x.name.value === sel.name.value);
               this.#checkFieldArguments(field?.arguments, sel.arguments, path);
 
@@ -465,15 +494,20 @@ export class Builder {
                 if (!this.#options.allowUnknownTypes) {
                   throw new Error(`got disjoint types on union selection: expected=${JSON.stringify(check)}, was ${JSON.stringify(possibleUnionOptions[i])}`);
                 }
-                return `${name}: /* inconsistent subtypes from union */ any`;
+                return `${name}: /* inconsistent subtypes from union */ any;`;
               }
             }
 
-            return `${name}: ${check}`;
+            return `${name}: ${check};`;
           }
 
           const field = type?.fields?.find((x) => x.name.value === sel.name.value);
           this.#checkFieldArguments(field?.arguments, sel.arguments, path);
+
+          // Short-circuit: the typename exists even without being in the schema.
+          if (this.#options.fixedTypenameField && !field && sel.name.value === TYPENAME_FIELD_NAME) {
+            return `${name}: ${JSON.stringify(type.name.value)};`;
+          }
 
           return `${name}: ${this.renderSingleType(field?.type, sel, path + `.${name}`)};`;
         }
@@ -481,7 +515,6 @@ export class Builder {
           // This renders the inner fragment (e.g., "... on Foo { bar }") so we can merge it below.
           const t = this.#internalRenderSingleType(sel.typeCondition!, sel, path + `.${sel.typeCondition!.name.value}`);
           extraFragmentParts.push(t);
-//          extraFragmentParts.push(['__typename: "Whatever"', t]);
           return '';
         };
         default: {
@@ -598,6 +631,53 @@ export class Builder {
       this.#context = undefined;
     }
   }
+
+}
+
+
+/**
+ * Copy any found selection of "__typename" to any inline fragments.
+ */
+const maybeCopyTypenameToInlineFragments = (all: readonly graphql.SelectionNode[]): readonly graphql.SelectionNode[] => {
+  let typenameField: graphql.FieldNode | null = null;
+  let hasFragment = false;
+
+  all.forEach((x) => {
+    if (x.kind === graphql.Kind.FIELD && x.name.value === TYPENAME_FIELD_NAME) {
+      typenameField = x;
+    } else if (x.kind === graphql.Kind.INLINE_FRAGMENT) {
+      hasFragment = true;
+    }
+  });
+  if (!typenameField || !hasFragment) {
+    return all;
+  }
+
+  return all.map((s) => {
+    if (s.kind !== graphql.Kind.INLINE_FRAGMENT) {
+      return s;
+    }
+
+    const alreadyHasTypename = s.selectionSet.selections.find((n) => n.kind === graphql.Kind.FIELD && n.name.value === TYPENAME_FIELD_NAME);
+    if (alreadyHasTypename) {
+      return s;
+    }
+
+    console.info('copying');
+    return {
+      ...s,
+      selectionSet: {
+        ...s.selectionSet,
+        selections: [
+          {
+            kind: graphql.Kind.FIELD,
+            name: { kind: graphql.Kind.NAME, value: TYPENAME_FIELD_NAME },
+          },
+          ...s.selectionSet.selections,
+        ],
+      },
+    };
+  });
 
 }
 

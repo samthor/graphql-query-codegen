@@ -11,6 +11,8 @@ type Query {
   somethingElse: [Foo]!
 
   getComplex(input: ComplexInput!): Int!
+
+  getOutputUnion: OutputUnion
 }
 
 type Mutation {
@@ -88,4 +90,17 @@ type Project {
   client: Client! @connection(fields: ["clientId:id"], query: "getClient")
   clientByProjectCode: Client! @connection(fields: ["projectCode"], query: "getClientByProjectCode")
 }
+
+
+type OutputA {
+  commonField: String
+  fieldA: String
+}
+
+type OutputB {
+  commonField: String
+  fieldB(arg: Int!): String
+}
+
+union OutputUnion = OutputA | OutputB
 

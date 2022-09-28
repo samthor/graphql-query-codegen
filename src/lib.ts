@@ -139,10 +139,11 @@ export class Builder {
 
   #internalRenderSingleType(
     type: graphql.NamedTypeNode,
-    sel: graphql.FieldNode | undefined,
+    sel: graphql.FieldNode | graphql.InlineFragmentNode | undefined,
     path: string,
   ): string {
     let renderInvalidObject = false;
+    let renderInvalidScalar = false;
 
     // Now, we have a named type.
     const namedTypeName = type.name.value;
@@ -198,10 +199,8 @@ export class Builder {
           // Sel being undefined means this is an input type request, so this is invalid.
           throw new Error(`Can't use an object type as an input type: use "input ...".`);
         } else if (!sel.selectionSet) {
-          if (this.#options.allowInvalidShape) {
-            return `/* invalid shape, should be type=${namedTypeName} */ any`;
-          }
-          throw new Error(`Can't select ${JSON.stringify(path)}: maps to type ${namedTypeName}, add inner selection`);
+          renderInvalidScalar = true;
+          break;
         }
         return this.renderMany(namedTypeDef, sel.selectionSet, path);
 
@@ -214,6 +213,29 @@ export class Builder {
           throw new Error(`No values for enum ${namedTypeName}`);
         }
         return namedTypeDef.values.map((v) => JSON.stringify(v.name.value)).join(' | ');
+
+      case graphql.Kind.UNION_TYPE_DEFINITION: {
+        // TODO: reuse for interface
+
+        if (!sel?.selectionSet) {
+          // The user is trying to select a union as a scalar. By the spec, unions are not allowed
+          // to include scalars.
+          renderInvalidScalar = true;
+          break;
+        }
+
+        // - namedTypedDef is the type we're pointing to (e.g. "union X = A | B")
+        // - sel.selectionSet.selections is what we actually want
+        return this.renderMany(namedTypeDef, sel.selectionSet, path);
+      }
+    }
+
+    // The user tried to request an object as a scalar.
+    if (renderInvalidScalar) {
+      if (!this.#options.allowInvalidShape) {
+        throw new Error(`Can't select ${JSON.stringify(path)}: maps to scalar ${namedTypeName}, add inner selection`);
+      }
+      return `/* invalid shape, should be object type=${namedTypeName} */ any`;
     }
 
     // The user tried to request a scalar as an object but due to their flags we render it anyway.
@@ -407,23 +429,79 @@ export class Builder {
   }
 
   renderMany(
-    type: graphql.ObjectTypeDefinitionNode,
+    type: graphql.ObjectTypeDefinitionNode | graphql.UnionTypeDefinitionNode,
     set: graphql.SelectionSetNode,
     path: string,
   ) {
+    const extraFragmentParts: string[] = [];
+
     const lines = set.selections.map((sel) => {
-      if (sel.kind !== graphql.Kind.FIELD) {
-        throw new Error(`only plain fields supported, found: ${sel.kind}`);
+      switch (sel.kind) {
+        case graphql.Kind.FIELD: {
+          const name = sel.name.value;
+
+          if (type.kind === graphql.Kind.UNION_TYPE_DEFINITION) {
+            const { types = [] } = type;
+
+            // This is requesting a common field on a union type.
+            // We render each sub-type and confirm they're the same.
+            const possibleUnionOptions = types.map((type) => {
+              const namedTypeDef = this.#allTypes[type.name.value];
+              if (namedTypeDef.kind !== graphql.Kind.OBJECT_TYPE_DEFINITION) {
+                // The spec says these have to be objects.
+                throw new Error(`Found union containing non-object type: ${namedTypeDef.kind}`);
+              }
+
+              // TODO: we're not checking args
+              const field = namedTypeDef.fields?.find((x) => x.name.value === sel.name.value);
+              this.#checkFieldArguments(field?.arguments, sel.arguments, path);
+
+              return this.renderSingleType(field?.type, sel, path + `.${name}`);
+            });
+
+            const check = possibleUnionOptions[0];
+            for (let i = 1; i < possibleUnionOptions.length; ++i) {
+              if (check !== possibleUnionOptions[i]) {
+                if (!this.#options.allowUnknownTypes) {
+                  throw new Error(`got disjoint types on union selection: expected=${JSON.stringify(check)}, was ${JSON.stringify(possibleUnionOptions[i])}`);
+                }
+                return `${name}: /* inconsistent subtypes from union */ any`;
+              }
+            }
+
+            return `${name}: ${check}`;
+          }
+
+          const field = type?.fields?.find((x) => x.name.value === sel.name.value);
+          this.#checkFieldArguments(field?.arguments, sel.arguments, path);
+
+          return `${name}: ${this.renderSingleType(field?.type, sel, path + `.${name}`)};`;
+        }
+        case graphql.Kind.INLINE_FRAGMENT: {
+          // This renders the inner fragment (e.g., "... on Foo { bar }") so we can merge it below.
+          const t = this.#internalRenderSingleType(sel.typeCondition!, sel, path + `.${sel.typeCondition!.name.value}`);
+          extraFragmentParts.push(t);
+//          extraFragmentParts.push(['__typename: "Whatever"', t]);
+          return '';
+        };
+        default: {
+          throw new Error(`only plain fields supported, found: ${sel.kind}`);
+        }
       }
+    }).filter((x) => x);
 
-      const name = sel.name.value;
-      const field = type?.fields?.find((x) => x.name.value === sel.name.value);
-      this.#checkFieldArguments(field?.arguments, sel.arguments, path);
+    // If this isn't one of the top-level types, include a hint as to what it is.
+    const commentValue = type.name.value;
+    if (!['Query', 'Mutation', 'Subscription'].includes(commentValue)) {
+      lines.unshift(`// ${commentValue}`);
+    }
 
-      return `${name}: ${this.renderSingleType(field?.type, sel, path + `.${name}`)};`;
-    });
-
-    return wrap(lines);
+    const w = wrap(lines);
+    if (extraFragmentParts.length) {
+      const extra = extraFragmentParts.join(' | ');
+      return `(${w} & (${extra}))`;
+    }
+    return w;
   }
 
   /**
@@ -491,7 +569,7 @@ export class Builder {
       // additional type information. This renders them but allows each re-render to provide more
       // that we continue to render, etc.
       const seenInputTypes = new Set<string>();
-      for (;;) {
+      for (; ;) {
         const next = this.#context!.inputTypesToRender.shift();
         if (next === undefined) {
           break;

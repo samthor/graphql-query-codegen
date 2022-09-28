@@ -26,3 +26,15 @@ query SomethingElse($complex: ComplexInput!) {
 mutation Blah {
   foo
 }
+
+query Union {
+  getOutputUnion {
+    commonField
+    ... on OutputA {
+      fieldA
+    }
+    ... on OutputB {
+      fieldB(arg: 123)
+    }
+  }
+}
